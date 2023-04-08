@@ -3,12 +3,12 @@
 public class Worker : BackgroundService
 {
     readonly ILogger<Worker> _logger;
-    readonly Options? _options;
+    readonly Config? _config;
     IpfsClient? _client;
 
-    public Worker(ILogger<Worker> logger, Options options)
+    public Worker(ILogger<Worker> logger, Config config)
     {
-        _options = options;
+        _config = config;
         _logger = logger;
     }
 
@@ -24,35 +24,48 @@ public class Worker : BackgroundService
         return base.StartAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Executes the worker's tasks asynchronously.
+    /// </summary>
+    /// <param name="stoppingToken">The cancellation token.</param>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var delay = TimeSpan.FromMinutes(5);
-        var peers = new List<MultiHash>
-        {
-            new MultiHash("QmY6YauXGkrJtGwFvE3RVukqwBiRaTqgDgY9ru8CY9bR9V"),
-            new MultiHash("QmYRmQwU99oLMQ5jL6maXbtTx1DypJk5uXRzURmcCwVe9N")
-        };
+        // Choose the appropriate configuration file based on whether the debugger is attached or not
+        var cfgFile = GlobalConsts.CONFIG_FILE;
+        if (Debugger.IsAttached)
+            cfgFile = GlobalConsts.CONFIG_FILE_DBG;
 
+        // Check if the client exists and read the configuration file
         if (_client != null)
         {
-            while (!stoppingToken.IsCancellationRequested)
+            if (File.Exists(GlobalConsts.CONFIG_FILE))
             {
+                var content = File.ReadAllText(GlobalConsts.CONFIG_FILE);
+                var config = Toml.ToModel<Config>(content);
 
-                foreach (var peer in peers)
+                // Perform the worker's tasks in a loop until cancellation is requested
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    var stats = await _client.PingAsync(peer, 10, stoppingToken);
+                    // Ping the specified content identifier and log the results
+                    var stats = await _client.PingAsync(new MultiHash(config.CID), 10, stoppingToken);
 
                     foreach (var stat in stats)
                     {
                         if (stat.Success)
-                            _logger.LogInformation($"{stat.Text}. Status: Success.", DateTimeOffset.Now);
+                            _logger.LogInformation(stat.Text, DateTimeOffset.Now);
                         else
-                            _logger.LogWarning($"{stat.Text}. Status: Failure.", DateTimeOffset.Now);
+                            _logger.LogWarning(stat.Text, DateTimeOffset.Now);
                     }
-                }
 
-                await Task.Delay(delay, stoppingToken);
+                    // Delay for the specified amount of time before performing the next ping
+                    await Task.Delay(TimeSpan.FromMinutes(config.Delay), stoppingToken);
+                }
             }
+        }
+        else
+        {
+            // Log a critical message if the client is not found
+            _logger.LogCritical("Client not found.", DateTimeOffset.Now);
         }
     }
 }
